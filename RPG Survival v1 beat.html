@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Survivors v1.0 — Release</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #0a0a0f; overflow: hidden; font-family: system-ui; color: #e0e0e0; touch-action: none; }
+  canvas { display: block; background: #0a0a0f; }
+  #ui {
+    position: absolute; top: 12px; left: 12px; font-size: 14px; line-height: 1.5;
+    pointer-events: none; text-shadow: 0 1px 3px #000;
+  }
+  #pause-btn {
+    position: absolute; top: 12px; right: 12px; width: 36px; height: 36px;
+    background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.5);
+    border-radius: 6px; color: white; font-size: 20px;
+    display: flex; align-items: center; justify-content: center; cursor: pointer; z-index: 5;
+  }
+  .screen {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.85);
+    display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 10;
+  }
+  .screen h2, .screen h1 { color: #7df9ff; }
+  .btn {
+    background: #1a1a2e; border: 2px solid #7df9ff; color: #fff; padding: 12px 20px;
+    font-size: 16px; border-radius: 8px; cursor: pointer; min-width: 220px; transition: all 0.15s; text-align: center;
+  }
+  .btn:hover, .btn:active { background: #7df9ff; color: #000; }
+  .btn.small { min-width: auto; padding: 8px 16px; font-size: 14px; }
+  .btn:disabled { opacity: 0.5; border-color: #555; color: #888; cursor: not-allowed; }
+  .btn .price-red { color: #ff6666; }
+  #upgrade-screen { overflow-y: auto; padding: 20px; background: rgba(0,0,0,0.9); }
+  #game-over h1 { color: #ff4444; font-size: 36px; }
+  #restart-btn, #menu-btn { margin-top: 10px; }
+  #coin-display { color: #ffd700; font-size: 18px; }
+  #tutorial-overlay {
+    position: absolute; inset: 0; background: rgba(0,0,0,0.75);
+    display: none; flex-direction: column; align-items: center; justify-content: center; gap: 20px; z-index: 15;
+    text-align: center; padding: 20px;
+  }
+  #tutorial-overlay p { color: #ccc; font-size: 16px; line-height: 1.5; max-width: 300px; }
+  #tutorial-overlay button { margin-top: 20px; }
+  .version-text { color: #888; font-size: 12px; margin-top: 20px; }
+</style>
+</head>
+<body>
+
+<canvas id="c"></canvas>
+
+<div id="ui" style="display:none;">
+  <div>Time: <span id="time">0</span>s</div>
+  <div>Kills: <span id="kills">0</span></div>
+  <div>Level: <span id="level">1</span></div>
+  <div>XP: <span id="xp">0</span> / <span id="xp-next">5</span></div>
+  <div>HP: <span id="hp">100</span></div>
+</div>
+
+<div id="pause-btn" style="display:none;">⏸</div>
+
+<!-- Tutorial -->
+<div id="tutorial-overlay">
+  <h2 style="color:#7df9ff;">Как играть</h2>
+  <p>WASD / стрелки или тач (джойстик) — движение.<br>Атака автоматическая по ближайшему врагу.<br>Собирай зелёные ромбы — это опыт.<br>При повышении уровня выбирай улучшения.<br><br>Выживай как можно дольше!</p>
+  <button class="btn" id="tutorial-ok-btn">Понятно</button>
+</div>
+
+<!-- Главное меню -->
+<div id="main-menu" class="screen" style="display:flex; background: rgba(0,0,0,0.9);">
+  <h1 style="font-size:40px; margin-bottom:5px;">SURVIVORS</h1>
+  <p style="color:#7df9ff; margin-bottom:20px;">v1.0 — Release Build</p>
+  <button class="btn" id="play-btn">Играть</button>
+  <button class="btn" id="shop-btn">Улучшения</button>
+  <button class="btn small" id="reset-btn">Сбросить прогресс</button>
+  <div class="version-text">Кросс-временной дуэт<br>DeepSeek (2025) + Grok 4.5 (2026)</div>
+</div>
+
+<!-- Магазин -->
+<div id="shop-screen" class="screen">
+  <h2>Магазин</h2>
+  <div id="coin-display"></div>
+  <div id="shop-items" style="display:flex; flex-direction:column; gap:10px;"></div>
+  <button class="btn" id="back-btn">Назад</button>
+</div>
+
+<!-- Левелап -->
+<div id="upgrade-screen" class="screen">
+  <h2>LEVEL UP!</h2>
+</div>
+
+<!-- Смерть -->
+<div id="game-over" class="screen">
+  <h1>YOU DIED</h1>
+  <div>Survived: <span id="final-time">0</span>s (Best: <span id="best-time">0</span>s)</div>
+  <div>Kills: <span id="final-kills">0</span> (Best: <span id="best-kills">0</span>)</div>
+  <div id="coins-earned" style="color:#ffd700; font-size:20px; margin-top:10px;"></div>
+  <button class="btn" id="restart-btn">Заново</button>
+  <button class="btn" id="to-shop-btn">В магазин</button>
+</div>
+
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+
+let W, H;
+function resize() {
+  W = canvas.width = window.innerWidth;
+  H = canvas.height = window.innerHeight;
+}
+window.addEventListener('resize', resize);
+resize();
+
+// ========== META ==========
+const defaultMeta = {
+  coins: 50,
+  upgrades: {
+    damage: 0, maxHp: 0, attackSpeed: 0, moveSpeed: 0, xpGain: 0, bladesStart: false
+  },
+  bestTime: 0, bestKills: 0
+};
+
+let meta = JSON.parse(localStorage.getItem('survivorsMeta')) || {...defaultMeta};
+function saveMeta() { localStorage.setItem('survivorsMeta', JSON.stringify(meta)); }
+
+function upgradeCost(type, level) {
+  const base = { damage: 80, maxHp: 100, attackSpeed: 90, moveSpeed: 80, xpGain: 100, bladesStart: 220 };
+  if (type === 'bladesStart') return base[type];
+  return Math.floor(base[type] * Math.pow(1.7, level));
+}
+
+// ========== SCREEN SHAKE ==========
+let shakeAmount = 0;
+let shakeDuration = 0;
+function addShake(amount, duration) {
+  shakeAmount = Math.max(shakeAmount, amount);
+  shakeDuration = Math.max(shakeDuration, duration);
+}
+
+// ========== STATE ==========
+let state = { phase: 'menu', time: 0, kills: 0, level: 1, xp: 0, xpNext: 5 };
+let player = {};
+let enemies = [], projectiles = [], xpOrbs = [], aoeEffects = [], visualEffects = [], bossProjectiles = [];
+let burningEffects = [];
+let spawnTimer, tankSpawnTimer, bossSpawnTimer, bossActive, bossAttackTimer;
+let touchActive, touchId, touchStartX, touchStartY, touchCurrentX, touchCurrentY;
+let keys = {};
+let lastTimestamp = 0;
+let tutorialShownThisSession = false; // чтобы не показывать каждый перезапуск вручную
+
+function applyUpgrades() {
+  player.damageMult = 1.0 + meta.upgrades.damage * 0.1;
+  player.maxHp = 100 + meta.upgrades.maxHp * 20;
+  player.hp = player.maxHp;
+  player.attackRate = 0.4 / (1 + meta.upgrades.attackSpeed * 0.12);
+  player.speed = 210 * (1 + meta.upgrades.moveSpeed * 0.08); // база чуть выше
+  player.xpGainMult = 1.0 + meta.upgrades.xpGain * 0.15;
+  player.hasBlades = meta.upgrades.bladesStart;
+  if (player.hasBlades && player.blades.length === 0) initBlades();
+}
+
+function resetGame() {
+  player = {
+    x: W/2, y: H/2, r: 14, hp: 100, maxHp: 100, damage: 12, damageMult: 1.0,
+    attackCooldown: 0, attackRate: 0.4, color: '#7df9ff',
+    hasAOE: false, hasBlades: false, hasLaser: false, hasLightning: false, hasFireNova: false,
+    aoePulse: { cooldown: 6.0, timer: 0.2, radius: 100, damage: 50 },
+    blades: [], bladeCount: 3, bladeRadius: 60, bladeSpeed: 2.5, bladeDamage: 15,
+    bladeHitCooldown: 0.25, bladeAngleOffset: 0,
+    laserRange: 250, laserDPS: 50, laserColor: '#ff3333', _laserTarget: null,
+    lightningTimer: 0, lightningCooldown: 1.0, lightningDamage: 15,
+    fireNovaTimer: 0, fireNovaCooldown: 3.0, fireNovaDamage: 30, fireNovaRadius: 120,
+    xpGainMult: 1.0
+  };
+  initBlades();
+  applyUpgrades();
+  state = { phase: 'playing', time: 0, kills: 0, level: 1, xp: 0, xpNext: 5 };
+  enemies = []; projectiles = []; xpOrbs = []; aoeEffects = []; visualEffects = [];
+  bossProjectiles = []; burningEffects = [];
+  spawnTimer = 0; tankSpawnTimer = 16; bossSpawnTimer = 90; bossActive = false; bossAttackTimer = 0;
+  touchActive = false; keys = {}; lastTimestamp = 0;
+  shakeAmount = 0; shakeDuration = 0;
+  document.getElementById('ui').style.display = 'block';
+  document.getElementById('pause-btn').style.display = 'flex';
+  document.getElementById('main-menu').style.display = 'none';
+  document.getElementById('game-over').style.display = 'none';
+  document.getElementById('shop-screen').style.display = 'none';
+  document.getElementById('upgrade-screen').style.display = 'none';
+  // Tutorial
+  if (!tutorialShownThisSession) {
+    document.getElementById('tutorial-overlay').style.display = 'flex';
+    tutorialShownThisSession = true;
+    state.phase = 'tutorial'; // игровой процесс не начнётся, пока тутор не закроют
+  }
+}
+
+function initBlades() {
+  player.blades = [];
+  for (let i = 0; i < player.bladeCount; i++) {
+    player.blades.push({ angle: (i / player.bladeCount) * Math.PI * 2 });
+  }
+}
+
+// ========== INPUT ==========
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code === 'Escape' && state.phase === 'playing') togglePause();
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+canvas.addEventListener('touchstart', e => {
+  e.preventDefault();
+  if (state.phase !== 'playing') return;
+  const t = e.changedTouches[0];
+  touchId = t.identifier; touchStartX = t.clientX; touchStartY = t.clientY;
+  touchCurrentX = t.clientX; touchCurrentY = t.clientY; touchActive = true;
+});
+canvas.addEventListener('touchmove', e => {
+  e.preventDefault();
+  if (!touchActive || state.phase !== 'playing') return;
+  for (const t of e.changedTouches) {
+    if (t.identifier === touchId) { touchCurrentX = t.clientX; touchCurrentY = t.clientY; }
+  }
+});
+canvas.addEventListener('touchend', e => { e.preventDefault(); touchActive = false; touchId = null; });
+canvas.addEventListener('touchcancel', () => { touchActive = false; touchId = null; });
+
+function togglePause() {
+  if (state.phase === 'playing') {
+    state.phase = 'paused'; document.getElementById('pause-btn').textContent = '▶';
+  } else if (state.phase === 'paused') {
+    state.phase = 'playing'; document.getElementById('pause-btn').textContent = '⏸';
+  }
+}
+document.getElementById('pause-btn').addEventListener('click', togglePause);
+
+// ========== TUTORIAL ==========
+document.getElementById('tutorial-ok-btn').addEventListener('click', () => {
+  document.getElementById('tutorial-overlay').style.display = 'none';
+  state.phase = 'playing';
+});
+
+// ========== SPAWN ==========
+function spawnEnemy(type = 'normal', eliteType = null) {
+  const side = Math.floor(Math.random() * 4);
+  let x, y;
+  if (side === 0) { x = Math.random() * W; y = -30; }
+  else if (side === 1) { x = W + 30; y = Math.random() * H; }
+  else if (side === 2) { x = Math.random() * W; y = H + 30; }
+  else { x = -30; y = Math.random() * H; }
+
+  let baseHp, baseSpeed, r, color, isBoss = false, isTank = false;
+  if (type === 'boss') {
+    r = 32; baseHp = 200 + state.time * 3; baseSpeed = 70; color = '#9933ff'; isBoss = true;
+  } else if (type === 'tank') {
+    r = 18; baseHp = 60 + state.time * 1.2; baseSpeed = Math.min(120, 90 + state.time * 0.3); color = '#ff8800'; isTank = true;
+  } else {
+    r = 11 + Math.random() * 4;
+    baseHp = 18 + state.time * 0.6;
+    baseSpeed = Math.min(190, 120 + Math.random() * 30 + state.time * 0.5);
+    color = Math.random() > 0.5 ? '#ff4444' : '#cc3333';
+  }
+
+  if (eliteType && type === 'normal') {
+    baseHp *= 1.5;
+    baseSpeed *= (eliteType === 'swift') ? 2.5 : 1;
+    r = (eliteType === 'swift') ? 9 : r;
+    if (eliteType === 'shielded') color = '#aaccff';
+    else if (eliteType === 'swift') color = '#ffff00';
+    else if (eliteType === 'regenerator') color = '#88ff88';
+  }
+
+  const e = {
+    x, y, r, speed: baseSpeed, hp: baseHp, maxHp: baseHp, color,
+    isTank, isBoss,
+    eliteType: eliteType || null,
+    bladeHitTimers: new Array(player.bladeCount || 3).fill(0),
+    pulsePhase: Math.random() * Math.PI * 2,
+    lastDamageTime: state.time
+  };
+  enemies.push(e);
+  if (isBoss) { bossActive = true; bossAttackTimer = 0; }
+}
+
+function maybeSpawnElite() {
+  if (Math.random() < 0.15) {
+    return ['shielded', 'swift', 'regenerator'][Math.floor(Math.random() * 3)];
+  }
+  return null;
+}
+
+// ========== UTILS ==========
+function isAttackBlockedByShield(enemy, attackX, attackY) {
+  if (enemy.eliteType !== 'shielded') return false;
+  const dxA = attackX - enemy.x;
+  const dyA = attackY - enemy.y;
+  const dxP = player.x - enemy.x;
+  const dyP = player.y - enemy.y;
+  const dot = dxA * dxP + dyA * dyP;
+  return dot > 0;
+}
+
+function spawnDeathParticles(x, y, color, count=6) {
+  for (let i=0; i<count; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const speed = 50 + Math.random() * 100;
+    visualEffects.push({ x, y, vx: Math.cos(angle)*speed, vy: Math.sin(angle)*speed, life: 0.3+Math.random()*0.2, color, size: 3 });
+  }
+}
+
+// ========== UPDATE ==========
+function update(timestamp) {
+  if (state.phase !== 'playing' && state.phase !== 'paused') return;
+  if (!lastTimestamp) lastTimestamp = timestamp;
+  let dt = (timestamp - lastTimestamp) / 1000;
+  if (dt > 0.1) dt = 0.1;
+  lastTimestamp = timestamp;
+
+  if (state.phase === 'paused') return;
+
+  state.time += dt;
+
+  if (shakeDuration > 0) {
+    shakeDuration -= dt;
+    if (shakeDuration <= 0) shakeAmount = 0;
+  }
+
+  // Movement
+  let dx = 0, dy = 0;
+  if (keys['KeyW'] || keys['ArrowUp']) dy -= 1;
+  if (keys['KeyS'] || keys['ArrowDown']) dy += 1;
+  if (keys['KeyA'] || keys['ArrowLeft']) dx -= 1;
+  if (keys['KeyD'] || keys['ArrowRight']) dx += 1;
+
+  if (touchActive) {
+    const angle = Math.atan2(touchCurrentY - touchStartY, touchCurrentX - touchStartX);
+    const dist = Math.hypot(touchCurrentX - touchStartX, touchCurrentY - touchStartY);
+    if (dist > 10) { dx = Math.cos(angle); dy = Math.sin(angle); }
+  }
+
+  if (dx || dy) {
+    const len = Math.hypot(dx, dy);
+    player.x += (dx / len) * player.speed * dt;
+    player.y += (dy / len) * player.speed * dt;
+  }
+
+  player.x = Math.max(player.r, Math.min(W - player.r, player.x));
+  player.y = Math.max(player.r, Math.min(H - player.r, player.y));
+
+  // Auto attack
+  player.attackCooldown -= dt;
+  if (player.attackCooldown <= 0 && enemies.length > 0) {
+    let nearest = null, minDist = Infinity;
+    for (const e of enemies) {
+      if (e._dead) continue;
+      const d = Math.hypot(e.x - player.x, e.y - player.y);
+      if (d < minDist) { minDist = d; nearest = e; }
+    }
+    if (nearest) {
+      const angle = Math.atan2(nearest.y - player.y, nearest.x - player.x);
+      projectiles.push({ x: player.x, y: player.y, vx: Math.cos(angle)*540, vy: Math.sin(angle)*540, r: 5, life: 1.2 });
+      player.attackCooldown = player.attackRate;
+    }
+  }
+
+  // Chain Lightning
+  if (player.hasLightning) {
+    player.lightningTimer -= dt;
+    if (player.lightningTimer <= 0 && enemies.length > 0) {
+      let nearest = null, minDist = Infinity;
+      for (const e of enemies) { if (e._dead) continue; const d = Math.hypot(e.x-player.x, e.y-player.y); if (d < minDist) { minDist=d; nearest=e; } }
+      if (nearest) {
+        const chain = [nearest];
+        let current = nearest;
+        for (let c=0; c<3; c++) {
+          let next = null, nextDist = 120;
+          for (const e of enemies) { if (e._dead || chain.includes(e)) continue; const d = Math.hypot(e.x-current.x, e.y-current.y); if (d < nextDist) { nextDist=d; next=e; } }
+          if (next) { chain.push(next); current = next; } else break;
+        }
+        for (let i=0; i<chain.length; i++) {
+          const dmg = player.lightningDamage * player.damageMult * Math.pow(0.8, i);
+          chain[i].hp -= dmg;
+          chain[i].lastDamageTime = state.time;
+          if (chain[i].hp <= 0) { killEnemy(chain[i]); chain[i]._dead = true; }
+        }
+        player._lightningChain = chain;
+        player._lightningTimer = 0.15;
+        player.lightningTimer = player.lightningCooldown;
+      }
+    }
+  }
+
+  // Fire Nova
+  if (player.hasFireNova) {
+    player.fireNovaTimer -= dt;
+    if (player.fireNovaTimer <= 0) {
+      aoeEffects.push({ x: player.x, y: player.y, r: 10, maxR: player.fireNovaRadius, life: 0.5, color: '#ff8800' });
+      for (const e of enemies) {
+        if (e._dead) continue;
+        if (Math.hypot(e.x-player.x, e.y-player.y) < player.fireNovaRadius) {
+          e.hp -= player.fireNovaDamage * player.damageMult;
+          e.lastDamageTime = state.time;
+          burningEffects.push({ enemy: e, timer: 2.0 });
+          if (e.hp <= 0) { killEnemy(e); e._dead = true; }
+        }
+      }
+      player.fireNovaTimer = player.fireNovaCooldown;
+    }
+  }
+
+  // Burning effects
+  for (let i=burningEffects.length-1; i>=0; i--) {
+    const burn = burningEffects[i];
+    burn.timer -= dt;
+    if (burn.timer <= 0 || burn.enemy._dead) { burningEffects.splice(i,1); continue; }
+    burn.enemy.hp -= 10 * player.damageMult * dt;
+    burn.enemy.lastDamageTime = state.time;
+    if (burn.enemy.hp <= 0) { killEnemy(burn.enemy); burn.enemy._dead = true; burningEffects.splice(i,1); }
+  }
+
+  // AOE Pulse
+  if (player.hasAOE) {
+    player.aoePulse.timer -= dt;
+    if (player.aoePulse.timer <= 0) {
+      aoeEffects.push({ x: player.x, y: player.y, r: 10, maxR: player.aoePulse.radius, life: 0.5 });
+      for (const e of enemies) {
+        if (e._dead) continue;
+        if (Math.hypot(e.x-player.x, e.y-player.y) < player.aoePulse.radius) {
+          e.hp -= player.aoePulse.damage * player.damageMult;
+          e.lastDamageTime = state.time;
+          if (e.hp <= 0) { killEnemy(e); e._dead = true; }
+        }
+      }
+      player.aoePulse.timer = player.aoePulse.cooldown;
+    }
+  }
+
+  // Blades
+  if (player.hasBlades) {
+    player.bladeAngleOffset += player.bladeSpeed * dt;
+    for (let i=0; i<player.blades.length; i++) {
+      const angle = player.blades[i].angle + player.bladeAngleOffset;
+      const bx = player.x + Math.cos(angle)*player.bladeRadius;
+      const by = player.y + Math.sin(angle)*player.bladeRadius;
+      for (const e of enemies) {
+        if (e._dead) continue;
+        if (!e.bladeHitTimers || e.bladeHitTimers.length < player.blades.length) {
+          e.bladeHitTimers = new Array(player.blades.length).fill(0);
+        }
+        if (Math.hypot(bx-e.x, by-e.y) < 10 + e.r) {
+          if (state.time >= e.bladeHitTimers[i]) {
+            if (!isAttackBlockedByShield(e, bx, by)) {
+              e.hp -= player.bladeDamage * player.damageMult;
+              e.bladeHitTimers[i] = state.time + player.bladeHitCooldown;
+              e.lastDamageTime = state.time;
+              visualEffects.push({ x: bx, y: by, life: 0.2, color: '#7df9ff', size: 4 });
+              if (e.hp <= 0) { killEnemy(e); e._dead = true; }
+            } else {
+              visualEffects.push({ x: bx, y: by, life: 0.1, color: '#fff', size: 5 });
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // Laser
+  if (player.hasLaser) {
+    let nearest = null, minDist = player.laserRange;
+    for (const e of enemies) {
+      if (e._dead) continue;
+      const d = Math.hypot(e.x-player.x, e.y-player.y);
+      if (d < minDist) { minDist = d; nearest = e; }
+    }
+    if (nearest) {
+      nearest.hp -= player.laserDPS * player.damageMult * dt;
+      nearest.lastDamageTime = state.time;
+      if (nearest.hp <= 0) { killEnemy(nearest); nearest._dead = true; }
+      player._laserTarget = { x: nearest.x, y: nearest.y };
+    } else { player._laserTarget = null; }
+  }
+
+  // Player projectiles
+  for (let i=projectiles.length-1; i>=0; i--) {
+    const p = projectiles[i];
+    p.x += p.vx*dt; p.y += p.vy*dt; p.life -= dt;
+    if (p.life <= 0 || p.x<-20||p.x>W+20||p.y<-20||p.y>H+20) { projectiles.splice(i,1); continue; }
+    for (let j=enemies.length-1; j>=0; j--) {
+      const e = enemies[j];
+      if (e._dead) continue;
+      if (Math.hypot(p.x-e.x, p.y-e.y) < p.r + e.r) {
+        if (!isAttackBlockedByShield(e, p.x, p.y)) {
+          e.hp -= player.damage * player.damageMult;
+          e.lastDamageTime = state.time;
+          projectiles.splice(i,1);
+          if (e.hp <= 0) { killEnemy(e); e._dead = true; }
+          break;
+        } else {
+          projectiles.splice(i,1);
+          visualEffects.push({ x: p.x, y: p.y, life: 0.1, color: '#fff', size: 6 });
+          break;
+        }
+      }
+    }
+  }
+
+  // Boss projectiles
+  for (let i=bossProjectiles.length-1; i>=0; i--) {
+    const bp = bossProjectiles[i];
+    bp.x += bp.vx*dt; bp.y += bp.vy*dt; bp.life -= dt;
+    if (bp.life<=0||bp.x<-20||bp.x>W+20||bp.y<-20||bp.y>H+20) { bossProjectiles.splice(i,1); continue; }
+    if (Math.hypot(bp.x-player.x, bp.y-player.y) < bp.r + player.r) {
+      player.hp -= 15; bossProjectiles.splice(i,1);
+      addShake(3, 0.1);
+      if (player.hp <= 0) { player.hp = 0; gameOver(); return; }
+    }
+  }
+
+  // Enemies move + regen + boss attack
+  for (const e of enemies) {
+    if (e._dead) continue;
+    const angle = Math.atan2(player.y-e.y, player.x-e.x);
+    e.x += Math.cos(angle)*e.speed*dt;
+    e.y += Math.sin(angle)*e.speed*dt;
+
+    if (e.eliteType === 'regenerator' && state.time - e.lastDamageTime > 2) {
+      e.hp += e.maxHp * 0.05 * dt;
+      if (e.hp > e.maxHp) e.hp = e.maxHp;
+    }
+
+    if (Math.hypot(e.x-player.x, e.y-player.y) < e.r + player.r) {
+      player.hp -= 18 * dt; // уменьшено с 21
+      addShake(2, 0.05);
+      if (player.hp <= 0) { player.hp=0; gameOver(); return; }
+    }
+
+    if (e.isBoss) {
+      bossAttackTimer -= dt;
+      if (bossAttackTimer <= 0) {
+        for (let i=0; i<10; i++) {
+          const ba = (i/10)*Math.PI*2;
+          bossProjectiles.push({ x: e.x, y: e.y, vx: Math.cos(ba)*200, vy: Math.sin(ba)*200, r:5, life:2.5 });
+        }
+        bossAttackTimer = 4.0;
+      }
+    }
+  }
+
+  // Clean dead
+  for (let i=enemies.length-1; i>=0; i--) {
+    if (enemies[i]._dead) {
+      if (enemies[i].isBoss) bossActive = false;
+      enemies.splice(i,1);
+    }
+  }
+
+  // XP orbs
+  for (let i=xpOrbs.length-1; i>=0; i--) {
+    const o = xpOrbs[i];
+    const dist = Math.hypot(o.x-player.x, o.y-player.y);
+    if (dist < 100) {
+      const a = Math.atan2(player.y-o.y, player.x-o.x);
+      o.x += Math.cos(a)*300*dt; o.y += Math.sin(a)*300*dt;
+    }
+    if (dist < player.r + o.r + 6) {
+      state.xp += o.value * player.xpGainMult;
+      xpOrbs.splice(i,1);
+      if (state.xp >= state.xpNext) {
+        state.xp -= state.xpNext;
+        state.level++;
+        state.xpNext = Math.floor(state.xpNext * 1.45);
+        openUpgradeScreen();
+        return;
+      }
+    }
+  }
+
+  // Spawns
+  spawnTimer -= dt;
+  if (spawnTimer <= 0) {
+    const elite = maybeSpawnElite();
+    spawnEnemy('normal', elite);
+    spawnTimer = Math.max(0.3, 1.2 - state.time*0.012);
+  }
+  tankSpawnTimer -= dt;
+  if (tankSpawnTimer <= 0) { spawnEnemy('tank'); tankSpawnTimer = Math.max(5, 16 - state.time*0.09); }
+  if (!bossActive) {
+    bossSpawnTimer -= dt;
+    if (bossSpawnTimer <= 0) { spawnEnemy('boss'); bossSpawnTimer = 90; }
+  }
+
+  document.getElementById('time').textContent = Math.floor(state.time);
+  document.getElementById('kills').textContent = state.kills;
+  document.getElementById('level').textContent = state.level;
+  document.getElementById('xp').textContent = state.xp;
+  document.getElementById('xp-next').textContent = state.xpNext;
+  document.getElementById('hp').textContent = Math.ceil(player.hp);
+}
+
+function killEnemy(e) {
+  state.kills++;
+  spawnDeathParticles(e.x, e.y, e.color, e.eliteType ? 8 : 5);
+  if (e.isBoss) {
+    for (let i=0; i<5; i++) xpOrbs.push({ x: e.x+(Math.random()-0.5)*40, y: e.y+(Math.random()-0.5)*40, r:6, value:1 });
+    xpOrbs.push({ x: e.x, y: e.y, r:10, value:3 });
+    xpOrbs.push({ x: e.x+15, y: e.y-10, r:10, value:3 });
+    aoeEffects.push({ x:e.x, y:e.y, r:10, maxR:90, life:0.6, color:'#cc66ff' });
+    addShake(6, 0.2);
+  } else {
+    const xpValue = e.eliteType ? 2 : 1;
+    xpOrbs.push({ x:e.x, y:e.y, r:6, value: xpValue });
+    if (e.isTank) {
+      aoeEffects.push({ x:e.x, y:e.y, r:5, maxR:70, life:0.4, color:'#ff6600' });
+      if (Math.hypot(e.x-player.x, e.y-player.y) < 70) {
+        player.hp -= 20;
+        addShake(4, 0.15);
+        if (player.hp <= 0) { player.hp=0; gameOver(); }
+      }
+    }
+  }
+}
+
+function openUpgradeScreen() {
+  state.phase = 'upgrade';
+  const screen = document.getElementById('upgrade-screen');
+  screen.innerHTML = '<h2>LEVEL UP!</h2>';
+  const options = [];
+  options.push({ text: '+35% Damage', action: () => { player.damageMult *= 1.35; } });
+  options.push({ text: '+20% Speed', action: () => { player.speed *= 1.20; } });
+  options.push({ text: '+40 Max HP + Heal', action: () => { player.maxHp += 40; player.hp = Math.min(player.maxHp, player.hp+40); } });
+  if (!player.hasAOE) options.push({ text: 'Pulse AOE (50 dmg)', action: () => { player.hasAOE = true; player.aoePulse.timer = 0.2; } });
+  if (!player.hasBlades) options.push({ text: 'Orbiting Blades (3)', action: () => { player.hasBlades = true; initBlades(); } });
+  if (!player.hasLaser) options.push({ text: 'Laser Beam (50 DPS)', action: () => { player.hasLaser = true; } });
+  if (!player.hasLightning) options.push({ text: 'Chain Lightning', action: () => { player.hasLightning = true; player.lightningTimer = 0; } });
+  if (!player.hasFireNova) options.push({ text: 'Fire Nova', action: () => { player.hasFireNova = true; player.fireNovaTimer = 0; } });
+  for (const opt of options) {
+    const btn = document.createElement('button'); btn.className = 'btn'; btn.textContent = opt.text;
+    btn.addEventListener('click', () => { opt.action(); state.phase = 'playing'; screen.style.display = 'none'; });
+    screen.appendChild(btn);
+  }
+  screen.style.display = 'flex';
+}
+
+function gameOver() {
+  state.phase = 'gameover';
+  const finalTime = Math.floor(state.time);
+  const finalKills = state.kills;
+  const coinsEarned = Math.floor(state.time * 2.2 + state.kills * 0.6);
+  meta.coins += coinsEarned;
+  if (finalTime > meta.bestTime) meta.bestTime = finalTime;
+  if (finalKills > meta.bestKills) meta.bestKills = finalKills;
+  saveMeta();
+
+  document.getElementById('final-time').textContent = finalTime;
+  document.getElementById('final-kills').textContent = finalKills;
+  document.getElementById('best-time').textContent = meta.bestTime;
+  document.getElementById('best-kills').textContent = meta.bestKills;
+  document.getElementById('coins-earned').textContent = `+${coinsEarned} монет`;
+  document.getElementById('game-over').style.display = 'flex';
+  document.getElementById('ui').style.display = 'none';
+  document.getElementById('pause-btn').style.display = 'none';
+}
+
+// ========== DRAW ==========
+function draw() {
+  ctx.clearRect(0,0,W,H);
+
+  let shakeX = 0, shakeY = 0;
+  if (shakeDuration > 0) {
+    shakeX = (Math.random() - 0.5) * shakeAmount;
+    shakeY = (Math.random() - 0.5) * shakeAmount;
+  }
+  ctx.save();
+  ctx.translate(shakeX, shakeY);
+
+  for (const a of aoeEffects) {
+    a.r += (a.maxR - a.r) * 0.2; a.life -= 0.016;
+    if (a.life <= 0) continue;
+    ctx.strokeStyle = a.color || '#fff'; ctx.globalAlpha = a.life*2; ctx.lineWidth=3;
+    ctx.beginPath(); ctx.arc(a.x,a.y,a.r,0,Math.PI*2); ctx.stroke(); ctx.globalAlpha=1;
+  }
+  for (let i = visualEffects.length - 1; i >= 0; i--) {
+    const v = visualEffects[i];
+    v.life -= 0.016;
+    if (v.life <= 0) { visualEffects.splice(i, 1); continue; }
+    if (v.vx !== undefined) { v.x += v.vx * 0.016; v.y += v.vy * 0.016; }
+    ctx.fillStyle = v.color; ctx.globalAlpha = Math.min(1, v.life * 3);
+    ctx.fillRect(v.x - v.size/2, v.y - v.size/2, v.size, v.size);
+  }
+  ctx.globalAlpha = 1;
+
+  for (const b of burningEffects) {
+    if (b.enemy._dead) continue;
+    ctx.fillStyle = '#ffaa00'; ctx.globalAlpha = 0.3 + Math.sin(state.time * 15) * 0.1;
+    ctx.beginPath(); ctx.arc(b.enemy.x, b.enemy.y, b.enemy.r+3, 0, Math.PI*2); ctx.fill(); ctx.globalAlpha=1;
+  }
+  ctx.fillStyle = '#00ff88';
+  for (const o of xpOrbs) {
+    ctx.beginPath(); ctx.moveTo(o.x, o.y-o.r); ctx.lineTo(o.x+o.r, o.y);
+    ctx.lineTo(o.x, o.y+o.r); ctx.lineTo(o.x-o.r, o.y); ctx.closePath(); ctx.fill();
+  }
+  ctx.fillStyle = '#ffee00';
+  for (const p of projectiles) { ctx.beginPath(); ctx.arc(p.x,p.y,p.r,0,Math.PI*2); ctx.fill(); }
+  ctx.fillStyle = '#cc66ff';
+  for (const bp of bossProjectiles) { ctx.beginPath(); ctx.arc(bp.x,bp.y,bp.r,0,Math.PI*2); ctx.fill(); }
+
+  if (player.hasLaser && player._laserTarget) {
+    ctx.strokeStyle = player.laserColor; ctx.lineWidth=3; ctx.globalAlpha = 0.7+Math.sin(state.time*30)*0.2;
+    ctx.beginPath(); ctx.moveTo(player.x, player.y); ctx.lineTo(player._laserTarget.x, player._laserTarget.y); ctx.stroke(); ctx.globalAlpha=1;
+  }
+  if (player._lightningChain && player._lightningTimer > 0) {
+    ctx.strokeStyle = '#fff'; ctx.lineWidth=2; ctx.globalAlpha = 0.9;
+    ctx.beginPath(); ctx.moveTo(player.x, player.y);
+    for (const e of player._lightningChain) { ctx.lineTo(e.x, e.y); }
+    ctx.stroke(); ctx.globalAlpha=1;
+    player._lightningTimer -= 0.016;
+    if (player._lightningTimer <= 0) player._lightningChain = null;
+  }
+
+  for (const e of enemies) {
+    ctx.fillStyle = e.color;
+    let drawR = e.isBoss ? e.r + Math.sin(state.time*5+e.pulsePhase)*2 : e.r;
+    if (e.eliteType === 'regenerator') drawR = e.r + Math.sin(state.time * 4) * 1.5;
+    ctx.beginPath(); ctx.arc(e.x, e.y, drawR, 0, Math.PI*2); ctx.fill();
+    if (e.eliteType === 'shielded') {
+      const angleToPlayer = Math.atan2(player.y-e.y, player.x-e.x);
+      ctx.strokeStyle = '#fff'; ctx.lineWidth=3; ctx.globalAlpha=0.7;
+      ctx.beginPath(); ctx.arc(e.x, e.y, drawR+4, angleToPlayer-Math.PI/2, angleToPlayer+Math.PI/2); ctx.stroke(); ctx.globalAlpha=1;
+    }
+    if (e.isBoss) { ctx.strokeStyle = '#cc66ff'; ctx.lineWidth=2; ctx.globalAlpha=0.3; ctx.stroke(); ctx.globalAlpha=1; }
+    if (e.hp < e.maxHp) {
+      ctx.fillStyle = '#333'; ctx.fillRect(e.x-12, e.y-e.r-8, 24, 4);
+      ctx.fillStyle = '#0f0'; ctx.fillRect(e.x-12, e.y-e.r-8, 24*(e.hp/e.maxHp), 4);
+    }
+  }
+
+  if (player.hasBlades) {
+    ctx.fillStyle = '#7df9ff';
+    for (let i=0; i<player.blades.length; i++) {
+      const a = player.blades[i].angle + player.bladeAngleOffset;
+      const bx = player.x + Math.cos(a)*player.bladeRadius, by = player.y + Math.sin(a)*player.bladeRadius;
+      ctx.beginPath(); ctx.moveTo(bx, by-6); ctx.lineTo(bx+5, by+5); ctx.lineTo(bx-5, by+5); ctx.closePath(); ctx.fill();
+    }
+  }
+
+  ctx.fillStyle = player.color; ctx.beginPath(); ctx.arc(player.x, player.y, player.r, 0, Math.PI*2); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth=2; ctx.stroke();
+
+  if (touchActive) {
+    ctx.strokeStyle = 'rgba(255,255,255,0.3)'; ctx.lineWidth=2;
+    ctx.beginPath(); ctx.arc(touchStartX, touchStartY, 30, 0, Math.PI*2); ctx.stroke();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)'; ctx.beginPath(); ctx.arc(touchCurrentX, touchCurrentY, 12, 0, Math.PI*2); ctx.fill();
+  }
+
+  ctx.restore();
+
+  if (state.phase === 'paused') {
+    ctx.fillStyle = 'rgba(0,0,0,0.6)'; ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#fff'; ctx.font = '32px system-ui'; ctx.textAlign = 'center'; ctx.fillText('PAUSED', W/2, H/2);
+  }
+}
+
+function loop(timestamp) {
+  update(timestamp);
+  draw();
+  requestAnimationFrame(loop);
+}
+
+// ========== UI ==========
+document.getElementById('play-btn').addEventListener('click', resetGame);
+document.getElementById('restart-btn').addEventListener('click', resetGame);
+document.getElementById('to-shop-btn').addEventListener('click', () => {
+  document.getElementById('game-over').style.display = 'none';
+  showShop();
+});
+document.getElementById('shop-btn').addEventListener('click', showShop);
+document.getElementById('back-btn').addEventListener('click', () => {
+  document.getElementById('shop-screen').style.display = 'none';
+  document.getElementById('main-menu').style.display = 'flex';
+});
+document.getElementById('reset-btn').addEventListener('click', () => {
+  if (confirm('Сбросить весь прогресс? Это действие нельзя отменить.')) {
+    if (confirm('Точно?')) {
+      meta = {...defaultMeta}; saveMeta(); alert('Прогресс сброшен.'); showShop();
+    }
+  }
+});
+
+function showShop() {
+  document.getElementById('main-menu').style.display = 'none';
+  document.getElementById('shop-screen').style.display = 'flex';
+  document.getElementById('coin-display').textContent = `Монеты: ${meta.coins}`;
+  const container = document.getElementById('shop-items');
+  container.innerHTML = '';
+  const items = [
+    { type: 'damage', name: 'Урон', perLevel: 10 },
+    { type: 'maxHp', name: 'Макс. HP', perLevel: 20 },
+    { type: 'attackSpeed', name: 'Скорость атаки', perLevel: 12 },
+    { type: 'moveSpeed', name: 'Скорость', perLevel: 8 },
+    { type: 'xpGain', name: 'Опыт', perLevel: 15 },
+    { type: 'bladesStart', name: 'Старт с клинками', oneTime: true }
+  ];
+  for (const item of items) {
+    const level = meta.upgrades[item.type] || 0;
+    const cost = upgradeCost(item.type, level);
+    const canAfford = meta.coins >= cost && !(item.oneTime && meta.upgrades[item.type]);
+    const btn = document.createElement('button');
+    btn.className = 'btn';
+    if (item.oneTime && meta.upgrades[item.type]) {
+      btn.textContent = `${item.name} (куплено)`;
+      btn.disabled = true;
+    } else {
+      const bonus = item.oneTime ? '' : ` +${item.perLevel}%`;
+      btn.innerHTML = `${item.name} (ур. ${level})${bonus} → <br>Цена: <span class="${canAfford ? '' : 'price-red'}">${cost}</span> монет`;
+      if (!canAfford) btn.disabled = true;
+    }
+    btn.addEventListener('click', () => {
+      if (canAfford) {
+        meta.coins -= cost;
+        if (item.oneTime) meta.upgrades[item.type] = true;
+        else meta.upgrades[item.type] = (meta.upgrades[item.type] || 0) + 1;
+        saveMeta(); showShop();
+      }
+    });
+    container.appendChild(btn);
+  }
+}
+
+requestAnimationFrame(loop);
+document.getElementById('main-menu').style.display = 'flex';
+</script>
+</body>
+</html>
